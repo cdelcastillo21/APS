@@ -1052,9 +1052,9 @@ def create_nodal_att(name, units, default_vals, nodal_vals):
 
 def add_nodal_attribute(f13, name, units, default_vals, nodal_vals):
   if type(f13)!=xr.Dataset:
-    f13 = read_fort13(f13_file)
+    f13 = read_fort13(f13)
   if name in f13['AttrName']:
-    raise Exception(f"Error - Nodal Attribute {name} already in f13 file {f13_file}")
+    raise Exception(f"Error - Nodal Attribute {name} already in f13 configs.")
   new_nodal = create_nodal_att(name, units, default_vals, nodal_vals)
 
   df = xr.merge([f13, new_nodal], combine_attrs='override')
