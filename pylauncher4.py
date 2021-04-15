@@ -12,7 +12,10 @@ import stat
 import subprocess
 import sys
 import time
-import hostlist3 as hs
+#import hostlist3 as hs
+# hostlist3 doesn't appear to be listed on conda-forge. Is there a reason why we use it over the
+# module hostlist from the python-hostlist package?
+import hostlist as hs
 
 # Globals
 pylauncherBarrierString = "__barrier__"

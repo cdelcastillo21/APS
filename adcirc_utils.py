@@ -304,10 +304,10 @@ def read_fort15(f15_file, ds=None):
         ln=ln, dtypes=2*[float])
 
   for i, p in enumerate(['DTDP', 'STATIM', 'REFTIM', 'WTIMINC ', 'RNDAY']):
-    ds, ln = read_param_line(ds, [p], f15_file, ln=ln, dtypes=[int])
+    ds, ln = read_param_line(ds, [p], f15_file, ln=ln, dtypes=[float])
 
   if ds.attrs['NRAMP'] in [0, 1]:
-    ds, ln = read_param_line(ds, ['DRAMP'], f15_file, ln=ln, dtypes=[int])
+    ds, ln = read_param_line(ds, ['DRAMP'], f15_file, ln=ln, dtypes=[float])
   elif ds.attrs['NRAMP']==2:
     ds, ln = read_param_line(ds, ['DRAMP', 'DRAMPExtFlux', 'FluxSettlingTime'], f15_file, ln=ln)
   elif ds.attrs['NRAMP']==3:
@@ -1013,9 +1013,10 @@ def write_fort15(ds, f15_file):
 
     write_param_line(ds, ['NFREQ'], f15)
     params = ['HAFREQ', 'HAFF', 'HAFACE']
-    for name in [x for x in ds['NAMEFR'].values]:
-      write_text_line(name, 'NAMEFR', f15)
-      write_param_line([ds[x].sel(NAMEFR=name).item(0) for x in params], params, f15)
+    if 'NAMEFR' in ds:
+        for name in [x for x in ds['NAMEFR'].values]:
+          write_text_line(name, 'NAMEFR', f15)
+          write_param_line([ds[x].sel(NAMEFR=name).item(0) for x in params], params, f15)
 
     write_param_line(ds, ['THAS', 'THAF', 'NHAINC', 'FMV'], f15)
     write_param_line(ds, ['NHASE', 'NHASV', 'NHAGE', 'NHAGV'], f15)
