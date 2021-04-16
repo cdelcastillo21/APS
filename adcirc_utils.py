@@ -68,11 +68,13 @@ def read_param_line(out, params, f, ln=None, dtypes=None):
   logger.info(','.join(params) + ' : ' + line)
   vals = [x for x in re.split("\\s+", line) if x != '']
   for i in range(len(params)):
+    # Avoid IndexErrors if a parameter was ommited
+    val = vals[i] if i < len(vals) else np.nan
     try:
       if dtypes:
-        out.attrs[params[i]] = dtypes[i](vals[i])
+        out.attrs[params[i]] = dtypes[i](val)
       else:
-        out.attrs[params[i]] = vals[i]
+        out.attrs[params[i]] = val
     except ValueError:
         out.attrs[params[i]] = np.nan
 
@@ -365,8 +367,10 @@ def read_fort15(f15_file, ds=None):
     tc, ln = read_param_line(tc, ['TPK', 'AMIGT', 'ETRF', 'FFT', 'FACET'], f15_file, ln=ln,
       dtypes=5*[float])
     tides.append(tc.attrs)
-  ds = xr.merge([ds, pd.DataFrame(tides).set_index('TIPOTAG').to_xarray()],
-      combine_attrs='override')
+
+  if len(tides):
+      ds = xr.merge([ds, pd.DataFrame(tides).set_index('TIPOTAG').to_xarray()],
+          combine_attrs='override')
 
   ds, ln = read_param_line(ds, ['NBFR'], f15_file, ln=ln, dtypes=[int])
 
@@ -377,9 +381,10 @@ def read_fort15(f15_file, ds=None):
     temp, ln = read_param_line(temp, ['BOUNTAG'], f15_file, ln=ln)
     temp, ln = read_param_line(temp, ['AMIG', 'FF', 'FACE'], f15_file, ln=ln, dtypes=3*[float])
     tides_elev.append(temp.attrs)
-  ds = xr.merge([ds, pd.DataFrame(tides_elev).set_index('BOUNTAG').to_xarray()],
-      combine_attrs='override')
 
+  if len(tides_elev):
+      ds = xr.merge([ds, pd.DataFrame(tides_elev).set_index('BOUNTAG').to_xarray()],
+          combine_attrs='override')
   # Harmonic forcing function specification at elevation sepcified boundaries
   force_elev = pd.read_csv(f15_file, skiprows=ln, names=['EMO', 'EFA'], delim_whitespace=True,
       header=None, low_memory=False)
@@ -390,6 +395,9 @@ def read_fort15(f15_file, ds=None):
   for i in range(ds.attrs['NBFR']-1):
     force_elev.loc[idxs[i]:idxs[i+1], 'ALPHA'] = force_elev.loc[idxs[i], 'EMO']
   force_elev = force_elev.drop(idxs[:i+1] + list(range(idxs[i+1], force_elev.shape[0])))
+  # Because the read_csv goes to the end of the file, it has the potential to pick up bogus data later on
+  # Given that we set ALPHA as an index later one, we probably should drop anything where it is null
+  force_elev = force_elev[force_elev['ALPHA'].notna()]
   force_elev['EMO'] = force_elev['EMO'].astype(float)
   force_elev['EFA'] = force_elev['EFA'].astype(float)
   ln = ln + force_elev.shape[0] + ds.attrs['NBFR']
@@ -425,7 +433,6 @@ def read_fort15(f15_file, ds=None):
     #   for j in range(int(info['NVEL'])):
     #     temp['VALS'][j] = read_numeric_line(f15_file, float)
     #   info['FORCE_NORMAL'].append(temp)
-
 
   ds, ln = read_param_line(ds, ['NOUTE', 'TOUTSE', 'TOUTFE', 'NSPOOLE'], f15_file, ln=ln,
       dtypes=4*[float])
@@ -581,7 +588,6 @@ def read_fort22(f22_file, NWS=12, ds=None):
       NWS = ds.attrs['NWS']
   else:
     ds = xr.Dataset()
-
   if NWS in [12, 12012]:
     ds, _ = read_param_line(ds, ['NWSET'], f22_file, ln=1, dtypes=[float])
     ds, _ = read_param_line(ds, ['NWBS'], f22_file, ln=2, dtypes=[float])
@@ -589,7 +595,7 @@ def read_fort22(f22_file, NWS=12, ds=None):
   else:
     msg = f"NWS {NWS} Not yet implemented!"
     logger.error(msg)
-    raise Exception(msg)
+    raise NotImplementedError(msg)
 
   return ds
 
@@ -927,10 +933,11 @@ def write_fort15(ds, f15_file):
     for i, p in enumerate(['CORI', 'NTIF']):
       write_param_line(ds, [p], f15)
 
-    params = ['TPK', 'AMIGT', 'ETRF', 'FFT', 'FACET']
-    for name in [x for x in ds['TIPOTAG'].values]:
-      write_text_line(name, 'TIPOTAG', f15)
-      write_param_line([ds[x].sel(TIPOTAG=name).item(0) for x in params], params, f15)
+    if 'TIPOTAG' in ds:
+        params = ['TPK', 'AMIGT', 'ETRF', 'FFT', 'FACET']
+        for name in [x for x in ds['TIPOTAG'].values]:
+          write_text_line(name, 'TIPOTAG', f15)
+          write_param_line([ds[x].sel(TIPOTAG=name).item(0) for x in params], params, f15)
 
     write_param_line(ds, ['NBFR'], f15)
 
@@ -1094,43 +1101,36 @@ def write_fort13(ds, f13_file):
 
 def process_adcirc_configs(path, filt='fort.*', met_times=[]):
   ds = xr.Dataset()
+  type_to_parser = {13: read_fort13, 14: read_fort14, 15: read_fort15, 22: read_fort22,
+    24: read_fort24, 25: read_fort25, 221: read_fort221, 222: read_fort222, 225: read_fort225}
+  need_times = {221, 222, 225}
 
   # Always read fort.14 and fort.15
   adcirc_files = glob.glob(os.path.join(path, filt))
   for ff in adcirc_files:
     ftype = int(ff.split('.')[-1])
     with timing(f"Reading {ff}") as read_time:
-      if ftype==14:
-        logger.info(f"Reading fort.14 file {ff}...")
-        ds = read_fort14(ff, ds=ds)
-      elif ftype==15:
-        logger.info(f"Reading fort.15 file {ff}...")
-        ds = read_fort15(ff, ds=ds)
-      elif ftype==13:
-        logger.info(f"Reading fort.13 file {ff}...")
-        ds = read_fort13(ff, ds=ds)
-      elif ftype==22:
-        logger.info(f"Reading fort.22 file {ff}...")
-        ds = read_fort22(ff, ds=ds)
-      elif ftype==24:
-        logger.info(f"Reading fort.24 file {ff}...")
-        ds = read_fort24(ff, ds=ds)
-      elif ftype==25:
-        logger.info(f"Reading fort.25 file {ff}...")
-        ds = read_fort25(ff, ds=ds)
-      elif ftype==221:
-        logger.info(f"Reading fort.221 file {ff}...")
-        ds = read_fort221(ff, ds=ds, times=met_times)
-      elif ftype==222:
-        logger.info(f"Reading fort.222 file {ff}...")
-        ds = read_fort222(ff, ds=ds, times=met_times)
-      elif ftype==225:
-        logger.info(f"Reading fort.225 file {ff}...")
-        ds = read_fort225(ff, ds=ds, times=met_times)
+      if ftype in type_to_parser:
+        parser = type_to_parser[ftype]
+        logger.info(f"Reading fort.{ftype} file {ff}.")
+        # Currently, we're not using fort.22 in process_data.py
+        # So we shouldn't abort if fort.22 has one of the many formats we don't support yet
+        try:
+            if ftype in need_times:
+              ds = parser(ff, ds=ds, times=met_times)
+            else:
+              ds = parser(ff, ds=ds)
+        except NotImplementedError:
+            logger.exception(f"Exception reading config {ff}")
+            print(f"Warning: could not process file {ff}!")
       else:
-        msg = f"Uncreognized file type = {ff}"
+        msg = f"Unrecognized file type = {ff}"
+        # If an uneeded file is in the input directory by mistake, we probably don't want to terminate.
+        # Better to issue a warning instead.
         logger.error(msg)
-        raise Exception(msg)
+        print(f"Warning: Cannot parse file {ff}! Please ensure this is a valid ADCIRC input file."
+            + " If so, consider submitting a pull request to parse it.")
+
     logger.info(f"Read {ff} successfully! - {read_time()[1]}")
 
   return ds
